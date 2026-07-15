@@ -1,13 +1,17 @@
+import argparse
 from pathlib import Path
 import re
 from docx import Document
 
 
-TARGET_FOLDER = "."  # Можна змінити на будь-який інший шлях до папки з документами .docx
-
-# Регулярний вираз для пошуку українських номерів
+# Регулярний вираз для пошуку українських номерів телефонів
 PHONE_PATTERN = re.compile(
     r'(?:\+?38)?\s*\(?0\d{2}\)?[-.\s]*\d{3}[-.\s]*\d{2}[-.\s]*\d{2}\b'
+)
+
+# Регулярний вираз для пошуку електронних адрес
+EMAIL_PATTERN = re.compile(
+    r'[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}'
 )
 
 
@@ -36,17 +40,18 @@ def extract_text_sources(doc):
                 yield para.text
 
 
-def find_phones_in_folder(folder_path_str):
+def find_contacts_in_folder(folder_path_str, recursive=False):
     folder = Path(folder_path_str)
 
     if not folder.exists() or not folder.is_dir():
         print(f"Помилка: Шлях '{folder}' не існує або не є папкою.")
         return
 
-    # Шукаємо всі файли .docx за допомогою rglob (рекурсивний пошук) або glob (тільки в цій папці)
-    # Використовуємо glob, щоб шукати лише в поточній папці (без підпапок)
+    # Обираємо метод пошуку файлів залежно від прапорця --recursive
+    glob_method = folder.rglob if recursive else folder.glob
+
     docx_files = [
-        f for f in folder.glob("*.docx")
+        f for f in glob_method("*.docx")
         if not f.name.startswith("~$")
     ]
 
@@ -58,29 +63,57 @@ def find_phones_in_folder(folder_path_str):
         try:
             doc = Document(file_path)
             phones_in_file = []
+            emails_in_file = []
 
             # Збираємо текст з усіх джерел у документі
             for text in extract_text_sources(doc):
-                if text.strip():
-                    matches = PHONE_PATTERN.findall(text)
-                    for match in matches:
-                        cleaned_phone = match.strip()
-                        if cleaned_phone not in phones_in_file:
-                            phones_in_file.append(cleaned_phone)
+                if not text.strip():
+                    continue
 
-            # Вивід результатів (лише якщо знайдено телефони)
-            if phones_in_file:
-                # file_path.name повертає тільки ім'я файлу (наприклад, "document.docx")
+                for match in PHONE_PATTERN.findall(text):
+                    cleaned_phone = match.strip()
+                    if cleaned_phone and cleaned_phone not in phones_in_file:
+                        phones_in_file.append(cleaned_phone)
+
+                for match in EMAIL_PATTERN.findall(text):
+                    cleaned_email = match.strip()
+                    if cleaned_email and cleaned_email not in emails_in_file:
+                        emails_in_file.append(cleaned_email)
+
+            # Вивід результатів (лише якщо щось знайдено)
+            if phones_in_file or emails_in_file:
                 print(f"📄 Файл: {file_path.name}")
                 for phone in phones_in_file:
                     print(f"   📞 {phone}")
+                for email in emails_in_file:
+                    print(f"   ✉️ {email}")
                 print("-" * 40)
 
         except Exception as e:
             print(f"⚠️ Не вдалося прочитати файл {file_path.name}: {e}")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Пошук телефонних номерів та електронних адрес у документах .docx"
+    )
+    parser.add_argument(
+        "folder",
+        nargs="?",
+        default=".",
+        help="Шлях до папки з документами .docx (за замовчуванням поточна папка)",
+    )
+    parser.add_argument(
+        "-r", "--recursive",
+        action="store_true",
+        help="Шукати документи також у підпапках",
+    )
+    return parser.parse_args()
+
+
 # --- Запуск ---
 if __name__ == "__main__":
-    print(f"Пошук телефонів у папці '{Path(TARGET_FOLDER).resolve()}'...\n")
-    find_phones_in_folder(TARGET_FOLDER)
+    args = parse_args()
+    print(f"Пошук у папці '{Path(args.folder).resolve()}'"
+          f"{' (рекурсивно)' if args.recursive else ''}...\n")
+    find_contacts_in_folder(args.folder, recursive=args.recursive)
