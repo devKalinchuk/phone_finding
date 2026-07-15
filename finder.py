@@ -32,17 +32,36 @@ def extract_paragraphs(doc):
             yield from section.footer.paragraphs
 
 
-def build_pattern(terms, case_sensitive):
+def term_to_regex(term):
     """
-    Створює один регулярний вираз-«або» для всіх слів/фраз пошуку.
-    Кожен термін екранується (re.escape), тому спецсимволи сприймаються
-    буквально, а фрази з лапок (де слова вже з'єднані пробілом) шукаються
-    як єдиний нерозривний рядок.
+    Перетворює один пошуковий термін на фрагмент регулярного виразу.
+    Спочатку весь термін екранується (re.escape), щоб спецсимволи
+    сприймались буквально, а потім екрановані ? та * повертаються назад
+    у вигляді підстановочних знаків:
+      ?  -> будь-який один символ (крім пробілу)
+      *  -> будь-яка кількість (0+) символів у межах слова (без пробілів)
+    Підстановочні знаки обмежені межами слова, щоб "пошук*" не
+    "з'їдав" сусідні слова в реченні.
     """
-    escaped_terms = [re.escape(term) for term in terms]
-    pattern_str = "|".join(escaped_terms)
+    escaped = re.escape(term)
+    escaped = escaped.replace(r"\?", r"\S").replace(r"\*", r"\S*")
+    return escaped
+
+
+def build_patterns(terms, case_sensitive):
+    """
+    Створює:
+    1) individual_patterns - список окремих скомпільованих виразів,
+       по одному на кожен термін (слово чи фразу з лапок) - потрібні,
+       щоб перевірити, що ВСІ терміни присутні в документі;
+    2) combined_pattern - один вираз-«або» з усіх термінів - потрібен
+       лише для підсвічування збігів у знайдених абзацах.
+    Символи ? та * у будь-якому терміні працюють як підстановочні знаки.
+    """
     flags = 0 if case_sensitive else re.IGNORECASE
-    return re.compile(pattern_str, flags)
+    individual_patterns = [re.compile(term_to_regex(term), flags) for term in terms]
+    combined_pattern = re.compile("|".join(term_to_regex(term) for term in terms), flags)
+    return individual_patterns, combined_pattern
 
 
 def highlight(text, pattern):
@@ -67,21 +86,31 @@ def find_text_in_folder(folder_path_str, terms, case_sensitive=False, recursive=
         print("У вказаній папці не знайдено документів .docx")
         return
 
-    pattern = build_pattern(terms, case_sensitive)
+    individual_patterns, combined_pattern = build_patterns(terms, case_sensitive)
     total_matches = 0
 
     for file_path in docx_files:
         try:
             doc = Document(file_path)
-            file_header_printed = False
 
-            for para in extract_paragraphs(doc):
-                text = para.text
-                if text.strip() and pattern.search(text):
+            # Спочатку зчитуємо всі непорожні абзаци один раз
+            paragraph_texts = [
+                para.text for para in extract_paragraphs(doc) if para.text.strip()
+            ]
+            full_text = "\n".join(paragraph_texts)
+
+            # Документ підходить, лише якщо КОЖЕН термін пошуку
+            # знайдений хоча б десь у документі
+            if not all(p.search(full_text) for p in individual_patterns):
+                continue
+
+            file_header_printed = False
+            for text in paragraph_texts:
+                if combined_pattern.search(text):
                     if not file_header_printed:
-                        print(f"📄 Файл: {file_path.name}")
+                        print(f"📄 Файл: {file_path.resolve()}")
                         file_header_printed = True
-                    print(f"   {highlight(text, pattern)}")
+                    print(f"   {highlight(text, combined_pattern)}")
                     total_matches += 1
 
             if file_header_printed:
@@ -102,8 +131,11 @@ def parse_args():
     parser.add_argument(
         "query",
         nargs="+",
-        help='Текст для пошуку. Кілька слів шукаються кожне окремо (finder слово1 слово2), '
-             'а текст "у лапках" шукається як одна нерозривна фраза (finder "слово1 слово2").'
+        help='Текст для пошуку. Якщо вказано кілька слів чи фраз (finder слово1 "фраза 2"), '
+             'у документі мають бути присутні УСІ вони одночасно (не обов\'язково в одному абзаці). '
+             'Текст "у лапках" шукається як одна нерозривна фраза. '
+             'Підтримуються підстановочні знаки: ? - будь-який один символ, '
+             '* - будь-яка кількість символів (наприклад: finder тел?фон, finder пошук*).'
     )
     parser.add_argument(
         "-c", "--case-sensitive",
