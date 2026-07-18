@@ -69,7 +69,7 @@ def highlight(text, pattern):
     return pattern.sub(lambda m: f"{RED}{m.group(0)}{RESET}", text)
 
 
-def find_text_in_folder(folder_path_str, terms, case_sensitive=False, recursive=False):
+def find_text_in_folder(folder_path_str, terms, case_sensitive=False, recursive=False, paths_only=False):
     folder = Path(folder_path_str)
 
     if not folder.exists() or not folder.is_dir():
@@ -83,7 +83,8 @@ def find_text_in_folder(folder_path_str, terms, case_sensitive=False, recursive=
     ]
 
     if not docx_files:
-        print("У вказаній папці не знайдено документів .docx")
+        if not paths_only:
+            print("У вказаній папці не знайдено документів .docx")
         return
 
     individual_patterns, combined_pattern = build_patterns(terms, case_sensitive)
@@ -104,6 +105,13 @@ def find_text_in_folder(folder_path_str, terms, case_sensitive=False, recursive=
             if not all(p.search(full_text) for p in individual_patterns):
                 continue
 
+            # Режим "лише шляхи": виводимо голий абсолютний шлях і переходимо
+            # до наступного файлу - зручно для передачі в xargs/mv/cp тощо.
+            if paths_only:
+                print(file_path.resolve())
+                total_matches += 1
+                continue
+
             file_header_printed = False
             for text in paragraph_texts:
                 if combined_pattern.search(text):
@@ -117,9 +125,10 @@ def find_text_in_folder(folder_path_str, terms, case_sensitive=False, recursive=
                 print("-" * 40)
 
         except Exception as e:
-            print(f"⚠️ Не вдалося прочитати файл {file_path.name}: {e}")
+            if not paths_only:
+                print(f"⚠️ Не вдалося прочитати файл {file_path.name}: {e}")
 
-    if total_matches == 0:
+    if total_matches == 0 and not paths_only:
         print("Збігів не знайдено.")
 
 
@@ -152,21 +161,30 @@ def parse_args():
         action="store_true",
         help="Шукати документи також у підпапках.",
     )
+    parser.add_argument(
+        "-p", "--paths-only",
+        action="store_true",
+        help="Виводити лише абсолютні шляхи до знайдених файлів (без тексту та підсвічування). "
+             "Зручно для скриптів, наприклад: "
+             "finder -p \"договір купівлі-продажу\" | xargs -d '\\n' -I{} mv {} ./contracts/",
+    )
     return parser.parse_args()
 
 
 # --- Запуск ---
 if __name__ == "__main__":
     args = parse_args()
-    print(
-        f"Пошук: {' | '.join(args.query)}\n"
-        f"Папка: '{Path(args.folder).resolve()}'"
-        f"{' (рекурсивно)' if args.recursive else ''}"
-        f"{' [точний регістр]' if args.case_sensitive else ''}\n"
-    )
+    if not args.paths_only:
+        print(
+            f"Пошук: {' | '.join(args.query)}\n"
+            f"Папка: '{Path(args.folder).resolve()}'"
+            f"{' (рекурсивно)' if args.recursive else ''}"
+            f"{' [точний регістр]' if args.case_sensitive else ''}\n"
+        )
     find_text_in_folder(
         args.folder,
         args.query,
         case_sensitive=args.case_sensitive,
         recursive=args.recursive,
+        paths_only=args.paths_only,
     )
